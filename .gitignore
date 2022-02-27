@@ -4,6 +4,10 @@
 *.dll
 *.so
 *.dylib
+matchmaker
+
+# Test .csv files
+*.csv
 
 # Test binary, built with `go test -c`
 *.test
