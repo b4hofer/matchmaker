@@ -3,6 +3,7 @@ package gnucash
 import (
 	"database/sql"
 	"log"
+	"regexp"
 
 	"github.com/jmoiron/sqlx"
 
@@ -338,31 +339,97 @@ func (b *Book) incrementExpenseVoucherCounter() int64 {
 	return b.incrementCounter("counters/gncExpVoucher")
 }
 
-func (b *Book) GetBillCounter() int64 {
-	s := b.getSlotByName("counters/gncBill")
+func (b *Book) AddSlotIfNotExist(s *Slot) *Slot {
+	existing := b.getSlotByName(s.Name)
+	if existing != nil {
+		return existing
+	}
+
+	b.AddSlot(s)
+	return s
+}
+
+func (b *Book) getCounterFormat(name string) string {
+	// Ensure 'counter_formats' slot exists
+	cfs := &Slot{
+		DbSlot: DbSlot{
+			ObjGuid:  b.Guid,
+			Name:     "counter_foramts",
+			SlotType: int(SlotTypeFrame),
+			GuidVal:  sql.NullString{NewGuid(), true},
+		},
+	}
+	cfs = b.AddSlotIfNotExist(cfs)
+
+	s := &Slot{
+		DbSlot: DbSlot{
+			ObjGuid:   cfs.ObjGuid,
+			Name:      name,
+			SlotType:  int(SlotTypeString),
+			StringVal: sql.NullString{"%05li", true},
+		},
+	}
+	s = b.AddSlotIfNotExist(s)
+	if s != nil && s.StringVal.Valid {
+		// Replace 'li' with 'd' (as Go's printf doesn't seem to support li)
+		r := regexp.MustCompile(`(%-?\d*)li`)
+		return r.ReplaceAllString(s.StringVal.String, "${1}d")
+	}
+
+	return ""
+}
+
+func (b *Book) getCounter(name string) int64 {
+	// Ensure 'counters' slot exists
+	cfs := &Slot{
+		DbSlot: DbSlot{
+			ObjGuid:  b.Guid,
+			Name:     "counters",
+			SlotType: int(SlotTypeFrame),
+			GuidVal:  sql.NullString{NewGuid(), true},
+		},
+	}
+	cfs = b.AddSlotIfNotExist(cfs)
+
+	s := &Slot{
+		DbSlot: DbSlot{
+			ObjGuid:  cfs.ObjGuid,
+			Name:     name,
+			SlotType: int(SlotTypeInt64),
+			Int64Val: sql.NullInt64{0, true},
+		},
+	}
+	s = b.AddSlotIfNotExist(s)
+
 	if s != nil && s.Int64Val.Valid {
 		return s.Int64Val.Int64
 	}
 
 	return -1
+}
+
+func (b *Book) GetBillCounterFormat() string {
+	return b.getCounterFormat("counter_formats/gncBill")
+}
+
+func (b *Book) GetInvoiceCounterFormat() string {
+	return b.getCounterFormat("counter_formats/gncInvoice")
+}
+
+func (b *Book) GetExpenseVoucherCounterFormat() string {
+	return b.getCounterFormat("counter_formats/gncExpVoucher")
+}
+
+func (b *Book) GetBillCounter() int64 {
+	return b.getCounter("counters/gncBill")
 }
 
 func (b *Book) GetInvoiceCounter() int64 {
-	s := b.getSlotByName("counters/gncInvoice")
-	if s != nil && s.Int64Val.Valid {
-		return s.Int64Val.Int64
-	}
-
-	return -1
+	return b.getCounter("counters/gncInvoice")
 }
 
 func (b *Book) GetExpenseVoucherCounter() int64 {
-	s := b.getSlotByName("counters/gncExpVoucher")
-	if s != nil && s.Int64Val.Valid {
-		return s.Int64Val.Int64
-	}
-
-	return -1
+	return b.getCounter("counters/gncExpVoucher")
 }
 
 func (b *Book) getSlotByName(name string) *Slot {
@@ -398,8 +465,17 @@ func (b *Book) getSlotForObjByName(objGuid string, slotName string) *Slot {
 }
 
 func (b *Book) AddInvoice(i *Invoice) {
+	// Generate Guid if not set
 	if i.Guid == "" {
 		i.Guid = NewGuid()
+	}
+
+	// Generate Id if not set
+	if i.Id == "" {
+		switch i.GetOwnerType() {
+		case OwnerTypeVendor:
+			b.GetBillCounter()
+		}
 	}
 
 	i.book = b
